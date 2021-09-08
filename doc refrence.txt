@@ -1,0 +1,9 @@
+1.Clustring 
+
+Refrence: https://gexijin.github.io/learnR/the-game-sales-dataset.html,
+https://github.com/gexijin/learnR/blob/master/09-Exploring-game-sale-data-set.Rmd
+
+2.Classification 
+
+Refrence:"https://rpubs.com/vh42720/vgsales,
+https://www.kaggle.com/anupambera/video-game-sales-analysis"

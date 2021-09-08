@@ -1,0 +1,449 @@
+---
+title: "predictive"
+author: "RStudio"
+date: "28/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dslabs)
+library(class)
+library(randomForest)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(ggthemes)
+library(viridis)
+library(lubridate)
+library(tm)
+library(ngram)
+library(RColorBrewer)
+library(gridExtra)
+library(knitr)
+library(plotly)
+library(reshape2)
+library(scales)
+library(dplyr)
+library(e1071)
+library(tree)
+library(MASS)
+```
+```{r}
+game <- tibble::as_tibble(read.csv("C:/Users/priya/Desktop/Game Research/Video_Games_Sales_as_at_22_Dec_2016.csv", stringsAsFactors = FALSE))
+theme_set(theme_tufte())
+
+################################################################################
+# Clean the data
+################################################################################
+
+# Remove rows with N/A values in the Year column
+game <- game %>% filter(Year_of_Release != "N/A")
+
+# Remove rows with N/A values in the Publisher column
+game <- game %>% filter(Publisher != "N/A")
+
+```
+
+```{r echo=TRUE, eval=FALSE}
+
+# View data summary
+summary(vgsales)
+
+```
+
+```{r echo=TRUE, eval=FALSE}
+
+# View number of rows
+nrow(vgsales)
+
+# View number of columns
+ncol(vgsales)
+
+```
+
+The video game sales data were from these 5 areas: North America, Europe, Japan, Other and Global. There are 576 game publishers and 31 platforms.
+
+```{r echo=TRUE, eval=FALSE}
+
+# View number of different countries  
+platforms <- unique(vgsales$Platform)
+platforms
+
+# Calculate the mean of game sales in North America
+avg_NA_sales <- mean(vgsales$NA_Sales)
+avg_NA_sales
+
+# Calculate the standard deviation of game sales in North America
+sd_NA_sales <- sd(vgsales$NA_Sales)
+sd_NA_sales
+
+# Calculate the mean of global game sales 
+avg_G_sales <- mean(vgsales$Global_Sales)
+avg_G_sales
+
+# Calculate the standard deviation of global game sales 
+sd_G_sales <- sd(vgsales$Global_Sales)
+sd_G_sales
+
+```
+
+
+The worst sellers were Monster Hunter Freedom 3 ($0) in North America and Turok ($0.01 million) globally. We know that Wii Sports was a top seller in North America and globally. Wii Sports had $41.49 million in North America and $82.74 million globally. 
+
+```{r echo=TRUE, eval=FALSE}
+
+# View bottom game sales in North America
+worst_game_sales <- which.min(vgsales$NA_Sales)
+vgsales$Name[worst_game_sales]
+min(vgsales$NA_Sales)
+
+# View top game sales in North America
+best_game_sales <- which.max(vgsales$NA_Sales)
+vgsales$Name[best_game_sales]
+max(vgsales$NA_Sales)
+
+# View bottom game sales Globally
+worst_game_sales_g <- which.min(vgsales$Global_Sales)
+vgsales$Name[worst_game_sales_g]
+min(vgsales$Global_Sales)
+
+# View top game sales Globally
+best_game_sales_g <- which.max(vgsales$Global_Sales)
+vgsales$Name[best_game_sales_g]
+max(vgsales$Global_Sales)
+
+```
+2.3	Data Modeling\
+
+We focused primarily on North America game sales from here on. In our algorithm and modeling development, we applied the kNN, Naive Bayes and Random Forests approaches to determine which model yields highest accuracy in games reaching their sales goals.\
+
+We chose to split our training and test set with (70/30) in order to limit the amount of variance in estimates. We proceeded to partition the vgsales data to perform our modeling as follows:\
+
+2.3.1 kNN Model\
+
+In the kNN Model, we began with selecting the predictors and left out the Genre data (and others) as its our target study. We built the model with the data normalized and used the square root of the number of observations to obtain the K value of 106 and 107. Then we calculated the accuracy of these created models.
+
+```{r echo=TRUE, eval=FALSE}
+
+##### kNN Model: #####
+
+## Normalization
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+
+## Selecting our predictors and translating state to status
+vgsales_subset <- vgsales %>%
+  dplyr::select(NA_Sales, EU_Sales, JP_Sales, Other_Sales, Global_Sales)
+
+## Creating the normalized subset
+vgsales_subset_n <- as.data.frame(lapply(vgsales_subset[,1:5], normalize))
+
+## Split data into a training set and a test set by randomly selection
+set.seed(100, sample.kind = "Rounding")
+d <- sample(1:nrow(vgsales_subset_n),size=nrow(vgsales_subset_n)*0.7,
+            replace = FALSE) 
+
+train_set <- vgsales_subset[d,] # 70% training data
+test_set <- vgsales_subset[-d,] # remaining 30% test data
+
+## Creating separate data frame for 'status' feature which is our target.
+train_labels <- vgsales_subset[d,1]
+test_labels <- vgsales_subset[-d,1]
+
+library(class)
+## Find the number of observations
+NROW(train_labels) 
+
+## Square root of 11,403 is 106.78 and so we will create 2 models. 
+## One with ‘K’ value as 106 and the other model with a ‘K’ value as 107.
+knn_106 <- knn(train=train_set, test=test_set, cl=train_labels$NA_Sales, k=106)
+knn_107 <- knn(train=train_set, test=test_set, cl=train_labels$NA_Sales, k=107)
+
+## Calculate the proportion of correct classification for k = 106, 107
+ACC_106 <- 100 * sum(test_labels$NA_Sales == knn_106)/NROW(test_labels$NA_Sales)
+ACC_107 <- 100 * sum(test_labels$NA_Sales == knn_107)/NROW(test_labels$NA_Sales)
+ACC_106
+# [1] 54.50082
+ACC_107
+# [1] 54.41899
+
+```
+
+We also created a loop that calculates the accuracy of the KNN model for ‘K’ values ranging from 1 to 108. This way we can check which ‘K’ value will result in more accurate model.
+
+```{r echo=TRUE, eval=FALSE}
+
+## Loop that calculates the accuracy of the kNN model
+i=1
+k_optm=1
+for (i in 1:108){
+  knn_mod <- knn(train=train_set, test=test_set, cl=train_labels$NA_Sales, k=i)
+  k_optm[i] <- 100 * sum(test_labels$NA_Sales==knn_mod)/NROW(test_labels$NA_Sales)
+  k=i
+  cat(k,'=',k_optm[i],'')
+}
+
+## Accuracy plot
+plot(k_optm, type="b", xlab="K- Value",ylab="Accuracy level")
+
+```
+
+The below graph shows that for ‘K’ value of 1 got the maximum accuracy at 76.636.\
+
+2.3.3 Random Forests Model\
+
+In the last Random Forests Model, we used the Genre_No variable as the focus for this algorithm. The randomForest() function requires numeric input values so we translated the Genre character values to numeric values and saved them as the Genre_No variable. 
+
+```{r echo=TRUE, eval=FALSE}
+
+#####  Random Forests Model: ##### 
+
+library(nlme)
+
+
+## Translate the values of Genre into Genre_No as follows:
+train_set <- train_set %>% 
+  mutate(Genre_No = case_when(
+    Genre == "Strategy" ~ 1,
+    Genre == "Sports" ~ 2,
+    Genre == "Simulation" ~ 3,
+    Genre == "Shooter" ~ 4,
+    Genre == "Role-Playing" ~ 5,
+    Genre == "Racing" ~ 6,
+    Genre == "Puzzle" ~ 7,
+    Genre == "Platform" ~ 8,
+    Genre == "Misc" ~ 9,
+    Genre == "Fighting" ~ 10,
+    Genre == "Adventure" ~ 11,
+    Genre == "Action" ~ 12,
+  ))
+
+test_set <- test_set %>% 
+  mutate(Genre_No = case_when(
+    Genre == "Strategy" ~ 1,
+    Genre == "Sports" ~ 2,
+    Genre == "Simulation" ~ 3,
+    Genre == "Shooter" ~ 4,
+    Genre == "Role-Playing" ~ 5,
+    Genre == "Racing" ~ 6,
+    Genre == "Puzzle" ~ 7,
+    Genre == "Platform" ~ 8,
+    Genre == "Misc" ~ 9,
+    Genre == "Fighting" ~ 10,
+    Genre == "Adventure" ~ 11,
+    Genre == "Action" ~ 12,
+  ))
+
+## Summary of data in train and test sets
+summary(train_set)
+summary(test_set)
+
+## Create a Random Forest model with default parameters
+model1 <- randomForest(Genre_No ~ ., data = train_set, na.action = na.omit, importance = TRUE)
+model1
+
+model2 <- randomForest(Genre_No ~ ., data = train_set, na.action = na.omit, ntree = 500, mtry = 6, 
+                       importance = TRUE)
+model2
+
+```
+```{r echo=TRUE, eval=FALSE}
+
+# Predicting on train set
+predTrain <- predict(model2, train_set, type = "class")
+
+# Checking classification accuracy
+table(predTrain, train_set$Genre_No) 
+
+# Predicting on test set
+predValid <- predict(model2, test_set, type = "class")
+
+# Checking classification accuracy
+mean(predValid == test_set$Genre_No)                    
+table(predValid, test_set$Genre_No)
+
+# To check important variables
+importance(model1)        
+varImpPlot(model1)  
+
+```
+
+
+```{r}
+
+colSums(is.na(game))
+
+#There are quite a lot of missing values in score but they appear in Sales which means a lot of games are neglected by the rating community. It is worth our time to take a closer look at these titles in missing values analysis.
+
+```
+# Top Global Sales each year
+```{r}
+game %>%
+    group_by(Year_of_Release, Publisher) %>%
+    summarize(Sales = sum(Global_Sales)) %>%
+    top_n(n = 1) %>%
+    kable()
+```
+Missing Values Analysis
+All missing values are in Critic Score, Critic Count and User Count. However, Developer also has an empty string for these missing values. Many of these titles are quite famous such as Super Mario Bros… thus perhaps they were released before the rating website created. A simple plot would suffice.
+
+##
+Video Game is an electronic game that is played on electronic medium devices such as personal computer, TV screen, gaming console or mobile phone. Some time the Video Game industry is called the interactive entertainment industry. The input device used for games, the game controller, varies across platforms. Common controller includes game pad, joysticks, mouse, keyboard, the touchscreens of mobile devices and buttons. Players typically view the game on a video screen or television and there are often game sounds from loudspeakers. Video Game development has a long history since 1970’s and in recent past with the revolution of the smartphones and tablets introduced new categories of video games such as mobile and social games. Developers introduced various technology and methodology in the computing system to popularize and make the video game more interesting and interactive such as “virtual reality”.
+
+The motivation of this project is to visualize the data set and practice exploratory analysis of data set. For the better understanding I have analyzed the data by some histograms and plot, which will help us to know the trend of the industry. I used some statistical methods to fit the data set and predict the sales.
+
+```{r}
+game=na.omit(game)
+attach(game)
+game$Name=as.factor(as.character(game$Name))
+game$Platform=as.factor(as.character(game$Platform))
+game$Year_of_Release=as.numeric(as.character(game$Year_of_Release))
+game$Genre=as.factor(as.character(game$Genre))
+game$Publisher=as.factor(as.character(game$Publisher))
+
+max(game$Year_of_Release,na.rm=T)
+
+```
+
+```{r}
+#Correlation of the sales Factor
+num_Sales=game[,c("NA_Sales","EU_Sales","JP_Sales","Other_Sales","Global_Sales")]
+cor(num_Sales)
+
+```
+From the correlation table it is observed that the NA_Sales (0.94), EU_Sales (0.9) and Other_Sales (0.75) are highly positive correlated with the Global_Sales. Although Global_Sales is correlated with the all Sales regions.
+
+
+
+```{r}
+#Prediction through Decision Trees
+train =( Year_of_Release <= 2012)
+game.train=game[train,]
+game.test = game[!train,]
+num_fact =  game[,c("NA_Sales","EU_Sales","Global_Sales")]
+
+High = ifelse(Global_Sales <=10.0,"No","Yes")
+dat = data.frame(num_fact,High)
+
+tree.dat = tree(as.factor(High)~.-Global_Sales, dat,subset=train)
+summary(tree.dat)
+plot(tree.dat)
+text(tree.dat ,pretty =0)
+
+dat.test = game[!train,]
+High.test = High[!train]
+tree.pred = predict(tree.dat, dat.test, type="class")
+table(Predict = tree.pred ,Truth=High.test)
+cat("Prediction Error = ", mean(tree.pred!=High.test)*100,"%")
+
+```
+
+Decision Tree - Prediction error of Global Sales will more than 10 million dollar, using North American Sales and European Sales data is 0.19%.
+
+```{r}
+# Prediction : Support Vector Machines
+train =( Year_of_Release <= 2011)
+game.train=game[train,]
+game.test = game[!train,]
+
+# Linear classification
+y.train=ifelse(game.train$Global_Sales>10.0,1,-1)
+dat=data.frame(x=game.train$NA_Sales+game.train$EU_Sales, y=as.factor(y.train))
+svmfit=svm(y~., data=dat, kernel="linear", cost=10,scale=FALSE)
+
+#summary(svmfit)
+table(Model=svmfit$fitted , Truth=dat$y)
+cat("Model Error = ", mean(svmfit$fitted!=dat$y)*100,"%")
+y.test=ifelse(game.test$Global_Sales>10.0,1,-1)
+dat.te=data.frame(x=game.test$NA_Sales+game.test$EU_Sales, y=as.factor(y.test))
+pred.te=predict(svmfit, newdata=dat.te)
+table(Predict=pred.te, Truth=dat.te$y)
+cat("Prediction Error = ", mean(pred.te!=dat.te$y)*100,"%")
+```
+SVM Linear - Prediction error of Global Sales will more than 10 million dollar, using North American Sales and European Sales data is 0.070%
+
+
+```{r}
+# Radial classification
+
+y.train=ifelse(game.train$Global_Sales>10.0,1,-1)
+dat=data.frame(x=game.train$NA_Sales+game.train$EU_Sales, y=as.factor(y.train))
+svmfit=svm(y~., data=dat, kernel="radial", cost=10, gamma=1, scale=FALSE)
+table(Model=svmfit$fitted , Truth=dat$y)
+cat("Model Error = ", mean(svmfit$fitted!=dat$y)*100,"%")
+y.test=ifelse(game.test$Global_Sales>10.0,1,-1)
+dat.te=data.frame(x=game.test$NA_Sales+game.test$EU_Sales, y=as.factor(y.test))
+pred.te=predict(svmfit, newdata=dat.te)
+table(predict=pred.te, truth=dat.te$y)
+cat("Prediction Error = ", mean(pred.te!=dat.te$y)*100,"%")
+```
+SVM Radial Classification - Prediction error of Global Sales will more than 10 million dollar, using North American Sales and European Sales data is 0.070%
+
+
+```{r}
+#Prediction through Linear Regression
+train =( Year_of_Release <= 2011)
+num_fact=game[,c("NA_Sales","EU_Sales","Global_Sales")]
+
+High=ifelse(Global_Sales <=10.0,"No","Yes")
+dat =data.frame(num_fact,High)
+
+glm.fit=glm(as.factor(High)~.-Global_Sales,dat,subset=train,family=binomial)
+summary(glm.fit)
+coef(glm.fit)
+summary(glm.fit)$coef
+
+dat.test = game[!train,]
+High.test=High[!train]
+glm.prob=predict(glm.fit,dat.test,type="response")
+glm.pred=rep("No",dim(dat.test)[1])
+glm.pred[glm.prob >.5]="Yes"
+table(Predict=glm.pred ,Truth=High.test)
+cat("Prediction Error = ", mean(glm.pred!=High.test)*100,"%")
+
+```
+Linear Regression by Generalized Linear Models - Prediction error of Global Sales will more than 10 million dollar, using North American Sales and European Sales data is 0.77%.
+
+
+```{r}
+#Linear Discriminant Analysis
+lda.fit=lda(as.factor(High)~.-Global_Sales ,dat,subset=train)
+summary(lda.fit)
+plot(lda.fit)
+
+dat.test = game[!train,]
+High.test=High[!train]
+lda.pred=predict(lda.fit,dat.test)
+names(lda.pred)
+lda.class=lda.pred$class
+table(Predict=lda.class ,Truth=High.test)
+cat("Prediction Error = ", mean(lda.class!=High.test)*100,"%")
+
+```
+
+
+Linear Regression by Linear Discriminant Analysis - Prediction error of Global Sales will more than 10 million dollar, using North American Sales and European Sales data is 0.077%.
+
+
+## kNN Results:
+
+In the kNN Model, we observed that training set produced starting points for the experiment with K = 106 and K = 107. They yielded 54.50082 and 54.41899 respectively. These values were average and did not perform as well as we had hope. We believe that data points being further apart contributed to the outcome. K = 1 produced the most accurate result as we saw in the plot prior, which also aligned correctly with the fact that the game ranking 1st was also that one that had the highest sales. This method can be further tuned.
+
+
+## Random Forests Results:
+
+Lastly, using Random Forests Model, we extrapolated that as the mean of squared residuals decrease then the % variance is increased. This is a common characteristic in the Random Forests Model. We chose Model 2 to further test and computed the variable importance values to see the effects. As shown, the Genre variable importance was 191.67, the NA_Sales variable importance was 20.85 and the Genre_Spec variable importance was 10.19. The decreasing variable importance trend seemed appropriate as we gave more weight to the Genre variable in developing this model. The model performed as we suspected but again, can be further refined.
+
+
+Overall, we thought the Random Forests Model was the most complex of the 2 models we utilized. Transparently, we intended to experiment and learn from the experience. We will take our insights and improve our future analyses. We began the project with a broad look at the video game sales data and as we visualized and explored more, we begin to understand the trends and implications. With data-driven knowledge, we developed our algorithm and models to experiment and tuned our prediction practices. We applied machine learning techniques that went beyond standard linear regression for our video game sales data set. We generated our data set, interpreted the data, performed various algorithms/modelings and presented our insights. We reviewed which video games were popular, explored and developed some prediction models for video game ranking and sales using 3 methods: the kNN, Naive Bayes and Random Forests Models. 
+
+We have gained invaluable knowledge from our coursework and are excited to continue to learn and hone by practicing our data science skills. As technology improves exponentially over time, perhaps one day we will accomplish a nearly perfect prediction model among other powerful systems that will improve our lives.
+

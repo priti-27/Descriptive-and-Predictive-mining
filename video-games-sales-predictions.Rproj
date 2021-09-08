@@ -1,0 +1,387 @@
+This is an attempt to predict the sales of future games using data scraped from VGChartz and  Metacritic available on Kaggle.
+The predictive models are only trained on North America sales at the moment. 
+Comments and suggestions are more than welcomed.
+
+```{r, warning=FALSE,message=FALSE}
+library(reshape2)
+library(dplyr)
+library(plotly)
+library(caret)
+library(corrplot)
+library(RColorBrewer)
+vg <-  read_xlsx("../input/Video_Games_Sales_as_at_22_Dec_2016.xlsx")
+vg$Year_of_Release <- as.numeric(as.character(vg$Year_of_Release))
+vg$User_Score <- as.numeric(as.character(vg$User_Score))
+vg[vg==""] <-NA
+vg$Genre <- as.character(vg$Genre)
+vg$Genre[vg$Genre=="Role-Playing"] <-"RolePlaying"
+vg <- vg %>% filter(vg$Year_of_Release<=2016)
+vg <- vg%>% arrange(desc(Year_of_Release))
+```
+
+## Descriptive analysis
+
+The goal here is to gain some intuitions of the magnitude of video game sales and its evolution throughout the period of time covered by the data set.
+
+The following three graphs present the number of games released in each year, the total units sold of games released in each year and the average units sold per game of games released in each year.
+
+```{r, warning=FALSE,message=FALSE}
+NR <- vg%>% select(Year_of_Release) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Count=n())
+
+plot_ly(data=NR,x=~Year_of_Release)%>%
+  add_trace(y=~Count,name="Number of release",mode="lines",type = 'scatter',
+            color = '#000000') %>%
+  layout(title = "Fig.1 Number of games released per year",
+         yaxis = list(title="Games released (count)"))
+
+```
+
+```{r, warning=FALSE,message=FALSE}
+Sales_NA <- vg%>% select(Year_of_Release,NA_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Sum_NA_Sales=sum(NA_Sales))
+Sales_EU <- vg%>% select(Year_of_Release,EU_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Sum_EU_Sales=sum(EU_Sales))
+Sales_JP <- vg%>% select(Year_of_Release,JP_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Sum_JP_Sales=sum(JP_Sales))
+Sales_OH <- vg%>% select(Year_of_Release,Other_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Sum_OH_Sales=sum(Other_Sales))
+
+Sales_evo <- Reduce(function(x,y) merge(x,y,all=TRUE,by="Year_of_Release"),list(Sales_NA,Sales_EU,Sales_JP,Sales_OH))
+
+plot_ly(data=Sales_evo,x=~Year_of_Release)%>%
+  add_trace(y=~Sum_NA_Sales,name="North America Sales",mode="lines",type = 'scatter') %>%
+  add_trace(y=~Sum_EU_Sales,name="Europe Sales",mode="lines",type = 'scatter') %>%
+  add_trace(y=~Sum_JP_Sales,name="Japan Sales",mode="lines",type = 'scatter') %>%
+  add_trace(y=~Sum_OH_Sales,name="Other Sales",mode="lines",type = 'scatter') %>%
+  layout(title = "Fig.2 Total units sold by year of release and by region",
+         yaxis = list(title="Sales (in millions of units)"))
+```
+
+
+```{r, warning=FALSE,message=FALSE}
+MSales_NA <- vg%>% select(Year_of_Release,NA_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Mean_NA_Sales=mean(NA_Sales),SD_NA_Sales =sd(NA_Sales))
+MSales_EU <- vg%>% select(Year_of_Release,EU_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Mean_EU_Sales=mean(EU_Sales),SD_EU_Sales =sd(EU_Sales))
+MSales_JP <- vg%>% select(Year_of_Release,JP_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Mean_JP_Sales=mean(JP_Sales),SD_JP_Sales =sd(JP_Sales))
+MSales_OH <- vg%>% select(Year_of_Release,Other_Sales) %>%
+  group_by(Year_of_Release)%>% 
+  summarise(Mean_OH_Sales=mean(Other_Sales),SD_OH_Sales =sd(Other_Sales))
+
+MSales_evo <- Reduce(function(x,y) merge(x,y,all=TRUE,by="Year_of_Release"),list(MSales_NA,MSales_EU,MSales_JP,MSales_OH))
+
+plot_ly(data=MSales_evo,x=~Year_of_Release)%>%
+  add_trace(y=~Mean_NA_Sales,name="North America Sales",
+            mode="lines",type = 'scatter',
+            error_y = ~list(value = SD_NA_Sales,
+                            color = '#000000')) %>%
+  add_trace(y=~Mean_EU_Sales,name="Europe Sales",
+            mode="lines",type = 'scatter',
+            error_y = ~list(value = SD_EU_Sales,
+                            color = '#000000')) %>%
+  add_trace(y=~Mean_JP_Sales,name="Japan Sales",
+            mode="lines",type = 'scatter',
+            error_y = ~list(value = SD_JP_Sales,
+                            color = '#000000')) %>%
+  add_trace(y=~Mean_OH_Sales,name="Other Sales",
+            mode="lines",type = 'scatter',
+            error_y = ~list(value = SD_OH_Sales,
+                            color='#000000'))%>%
+  layout(title = "Fig.3 Average units sold per game by year of release and by region",
+         yaxis = list(title="Sales (in millions of units)"))
+```
+
+From Figure 1, we can see that the number of games released reached its peak at around 2008-2009. This peak also corresponds to a peak in the total units of games sold as shown in Figure 2. 
+However, in terms of the average units sold per game, we do not observe any particular increase during this period in Figure 3. 
+In fact, the average units sold per game has greatly declined from 1980s to 1990s. This is probably due to the increased competition in the market. 
+This number became more stable in the 2000s before experiencing a slight decrease again starting from 2013.
+
+The finding that the average units sold per game is not stationnary throughout the period covered has some implications on predictive modelling that will be discussed in the following paragraph.
+
+The following graph presents the percentage of the total sales by year of release that different game platforms shared. 
+Game platforms are represented by colors from different palettes according to their vendor. I took the platform-vendor definition from [Leonard's analysis](https://www.kaggle.com/leonardf/releases-and-sales).
+Microsoft platforms are colored in greys, Nintendo in blues, Sega in oranges, Sony in greens, other platforms (including PC) are colored in purples.
+
+```{r, warning=FALSE,message=FALSE}
+nintendoplatforms = c("3DS","DS","GB","GBA","N64","GC", "NES","SNES","Wii","WiiU")
+sonyplatforms = c("PS","PS2","PSP","PS3","PS4","PSV")
+segaplatforms = c("GEN","SCD","DC","GG","SAT")
+msplatforms = c("XB","X360", "XOne")
+otherplatforms = c("2600","3DO","NG","PCFX","TG16","WS")
+pc= c('PC')
+
+vg$Platformvendor[vg$Platform %in% nintendoplatforms] <- "Nintendo"
+vg$Platformvendor[vg$Platform %in% sonyplatforms] <- "Sony"
+vg$Platformvendor[vg$Platform %in% msplatforms] <- "Microsoft"
+vg$Platformvendor[vg$Platform %in% segaplatforms] <- "Sega"
+vg$Platformvendor[vg$Platform %in% pc] <- "PC"
+vg$Platformvendor[vg$Platform %in% otherplatforms] <- "Other"
+
+Platform_level <- vg%>% group_by(Platform)%>% 
+  summarise(Sales = sum(Global_Sales))
+
+Platform_level<- left_join(Platform_level,vg[,c("Platformvendor","Platform")])
+Platform_level <- unique(Platform_level)
+Platform_level<- Platform_level%>% arrange(Platformvendor,Sales)
+Platform_level$Platform <-factor(Platform_level$Platform , levels = Platform_level$Platform)
+
+Platform_level$color <- c(brewer.pal(3,'Greys'),
+                          brewer.pal(9,'Blues'),"#000000",
+                          brewer.pal(7,'Purples'),
+                          brewer.pal(5,'Oranges'),
+                          brewer.pal(6,'Greens'))
+                          
+N_platform <-vg%>%group_by(Platform,Year_of_Release) %>% 
+  summarise(Sales=sum(Global_Sales))
+
+N_platform<- N_platform%>%group_by(Year_of_Release)%>% 
+  mutate(YearTotal = sum(Sales),Percent = Sales/YearTotal)
+N_platform$Platform <-factor(N_platform$Platform , levels = Platform_level$Platform)
+
+plot_ly(N_platform,x=~Year_of_Release,y=~Percent,
+          color=~Platform,colors=Platform_level$color,
+          hoverinfo='text',type='bar',
+          text=~paste('Year : ', Year_of_Release,'<br>',
+                      'Platform : ',Platform,'<br>',
+                      'Sales (in millions of units): ', Sales,'<br>',
+                      'Percentage in total game sales: ',round(Percent,2)*100,'%'))%>%
+                                                                                                                                        layout(barmode='stack',
+                                                                                                                                               title='Fig.4 Percentage of game platforms in total sales by year of release')
+                                                                                                                                        
+                                                                                                                                        
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        ## Predictive analysis
+                                                                                                                                        
+                                                                                                                                        The goal now is to predict the sales of future games based on the pattern that can be learned from this data set. At the moment, the analysis focuses only on the sales in North America.
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        D_model <-  vg[,c('NA_Sales',
+                                                                                                                                                          'Name',
+                                                                                                                                                          'Year_of_Release',
+                                                                                                                                                          'Publisher',
+                                                                                                                                                          'Platform',
+                                                                                                                                                          'Genre',
+                                                                                                                                                          'Critic_Score',
+                                                                                                                                                          'Critic_Count',
+                                                                                                                                                          'User_Score',
+                                                                                                                                                          'User_Count')]
+                                                                                                                                        ```
+                                                                                                                                        ### Data preprocessing
+                                                                                                                                        
+                                                                                                                                        #### Data imputation and data splitting
+                                                                                                                                        
+                                                                                                                                        One of the difficulties this data set presents is the prevalence of missing values. In fact, the values for Critic Score, Critic Count, User Score and User Count are missing for more than half of the observations in the data set. 
+                                                                                                                                        The following shows the percentage of missing values in each variable.
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        naPerc<-apply(D_model,2, function(x){length(which(is.na(x)))/dim(D_model)[1]})
+                                                                                                                                        naPerc
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        For variable with few missing values such as Name and Genre, we can simply delete the observations with missing values without much consequence. For other variables where there is a large percentage of missing values, bagged decision tree is used to impute these values.
+                                                                                                                                        
+                                                                                                                                        To make the analysis more realistic, I used the older 80% of the observations to train the models, the following 10% to choose the hyperparameters and the most recent 10% to test the models. 
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        # delete observations w missing val in Genre & Name
+                                                                                                                                        D_model <- D_model %>% filter(!is.na(Genre)&!is.na(Name))
+                                                                                                                                        # impute data for other predictor with missing value
+                                                                                                                                        # keep the more recent 10% as test data
+                                                                                                                                        preproc <- preProcess(D_model[,-1], method = c("bagImpute")) # alternative :knnImpute, median
+                                                                                                                                        X_train <- predict(preproc, D_model[D_model$Year_of_Release <= quantile(D_model$Year_of_Release, .9),-1])
+                                                                                                                                        X_test <- predict(preproc, D_model[D_model$Year_of_Release > quantile(D_model$Year_of_Release, .9),-1])
+                                                                                                                                        Y_test <- D_model[1:dim(X_test)[1],1]
+                                                                                                                                        length(Y_test)==dim(X_test[1])[1]
+                                                                                                                                        Y_train <- D_model[dim(X_test)[1]+1:dim(X_train)[1],1]
+                                                                                                                                        length(Y_train)==dim(X_train[1])[1]
+                                                                                                                                        D_train <- cbind(Y_train,X_train)
+                                                                                                                                        train_indx <- which(D_train$Year_of_Release<quantile(D_train$Year_of_Release,0.875))
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        #### Feature engineering
+                                                                                                                                        
+                                                                                                                                        Publisher should be an important factor that influences the sales of a game. However, this variable can not be used directly in the models for two reasons. 
+                                                                                                                                        First, this categorical variable contains far too many categories (all publishers ever existed in the data set since the 80s). Second, there will possibly be some publishers in the test set that have never been seen by the models in training.
+                                                                                                                                        To create a variable that captures the influence of publisher on games sales, I used the average units sold per game over the last four years of each publisher in the training set. 
+                                                                                                                                        This value will be 0 if a publisher has not published any game in the last four years. The reason for using only the sales in the training set is to avoid data snooping.
+                                                                                                                                        For publishers in the test set that do not exist in the training set, the value of this variable will also be zero.
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        P_avg_Sales  <-D_train%>%
+                                                                                                                                          filter(Year_of_Release>=max(Year_of_Release)-3)%>% 
+                                                                                                                                          group_by(Publisher)%>% 
+                                                                                                                                          mutate(avgSales = mean(Y_train))%>%ungroup()%>%
+                                                                                                                                          select(Publisher,avgSales)%>% unique()
+                                                                                                                                        
+                                                                                                                                        D_train<- left_join(D_train,P_avg_Sales,by="Publisher")
+                                                                                                                                        D_train[is.na(D_train)]<-0
+                                                                                                                                        D_train <- D_train%>% select(-Publisher,-Name)
+                                                                                                                                        X_test <- left_join(X_test,P_avg_Sales,by="Publisher")
+                                                                                                                                        X_test[is.na(X_test)]<-0
+                                                                                                                                        X_test <- X_test%>% select(-Publisher,-Name)
+                                                                                                                                        ```
+                                                                                                                                        #### Centering and scaling
+                                                                                                                                        
+                                                                                                                                        Finally, I centered and scaled all the numerical variables (except Year of Release).
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        cs <- preProcess(D_train[,c(5:9)],method=c("center","scale"))
+                                                                                                                                        D_train <- cbind(D_train[,c(1:4)],predict(cs,D_train[,c(5:9)]))
+                                                                                                                                        cs <- preProcess(X_test[,c(4:8)],method=c("center","scale"))
+                                                                                                                                        X_test <- cbind(X_test[,c(1:3)],predict(cs,X_test[,c(4:8)]))
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        Here is how the final data that will be used to train the models looks like
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        head(D_train)
+                                                                                                                                        ```
+                                                                                                                                        As as sanity check, the predictors are not highly correlated.
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        cormax <- cor(D_train[,c(5:9)])
+                                                                                                                                        corrplot(cormax,method="number")
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        ### Modelling
+                                                                                                                                        
+                                                                                                                                        As mentionned earlier, the average units sold per game has evolved greatly since the 80s when the data set begins. This poses another difficulty to predictive modelling since models trained on the older data might generalize poorly to the newer data used for testing. Besides, the validation result might not be a good indication of the test result under these conditions.
+                                                                                                                                        Some of my attempts to tackle this problem include attaching more weights to recent observations during training and choosing models that are robust to outliers such as support vector machine and random forest. 
+                                                                                                                                        
+                                                                                                                                        The four models evaluated here are linear regression, elastic net, support vector machine and random forest.
+                                                                                                                                        
+                                                                                                                                        #### Linear regression
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        ctrl <- trainControl(method='LGOCV',
+                                                                                                                                                             index = list(TrainSet = train_indx))
+                                                                                                                                        set.seed(666)
+                                                                                                                                        M_base <- train(Y_train~Year_of_Release+Genre+Critic_Score+
+                                                                                                                                                          Critic_Count+User_Score+User_Count+Platform,
+                                                                                                                                                        weights=exp(D_train$Year_of_Release-min(D_train$Year_of_Release)+1),# more weights for recent data
+                                                                                                                                                        data=D_train,
+                                                                                                                                                        trControl=ctrl,
+                                                                                                                                                        method="lm")
+                                                                                                                                        train_p_b <- predict(M_base,D_train)
+                                                                                                                                        test_p_b <- predict(M_base,X_test)
+                                                                                                                                        RMSE(train_p_b, D_train$Y_train) # training error
+                                                                                                                                        M_base$results['RMSE'] # validation error
+                                                                                                                                        ```
+                                                                                                                                        #### Elastic net
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        glmnetgrid <-expand.grid(alpha=c(0.1,0.55,1),lambda=seq(0,0.5,0.1))
+                                                                                                                                        set.seed(666)
+                                                                                                                                        M_glmnet<- train(Y_train~Year_of_Release+Genre+Critic_Score+
+                                                                                                                                                           Critic_Count+User_Score+User_Count+Platform+avgSales,
+                                                                                                                                                         weights=exp(D_train$Year_of_Release-min(D_train$Year_of_Release)+1),# more weights for recent data
+                                                                                                                                                         data=D_train,
+                                                                                                                                                         trControl=ctrl,
+                                                                                                                                                         method="glmnet",
+                                                                                                                                                         tuneGrid=glmnetgrid)
+                                                                                                                                        train_p_glmnet <- predict(M_glmnet,D_train)
+                                                                                                                                        test_p_glmnet<- predict(M_glmnet,X_test)
+                                                                                                                                        RMSE(train_p_glmnet, D_train$Y_train) # training error
+                                                                                                                                        M_glmnet$results[row.names(M_glmnet$bestTune),'RMSE']# validation error
+                                                                                                                                        ```
+                                                                                                                                        #### Support vector machine
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        set.seed(666)
+                                                                                                                                        M_svm <- train(Y_train~Year_of_Release+Genre+Critic_Score+
+                                                                                                                                                         Critic_Count+User_Score+User_Count+Platform+avgSales,
+                                                                                                                                                       data=D_train,
+                                                                                                                                                       weights=exp(D_train$Year_of_Release-min(D_train$Year_of_Release)+1),
+                                                                                                                                                       method="svmRadial",
+                                                                                                                                                       trControl=ctrl)
+                                                                                                                                        train_p_svm <- predict(M_svm,D_train)
+                                                                                                                                        test_p_svm<- predict(M_svm,X_test)
+                                                                                                                                        RMSE(train_p_svm, D_train$Y_train) # training error
+                                                                                                                                        M_svm$results[row.names(M_svm$bestTune),'RMSE']# validation error
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        #### Random forest
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        
+                                                                                                                                        set.seed(666)
+                                                                                                                                        M_rf <- train(Y_train~Year_of_Release+Genre+Critic_Score+
+                                                                                                                                                        Critic_Count+User_Score+User_Count+Platform+avgSales,
+                                                                                                                                                      weights=exp(D_train$Year_of_Release-min(D_train$Year_of_Release)+1),# more weights for recent data
+                                                                                                                                                      data=D_train,
+                                                                                                                                                      method="rf",
+                                                                                                                                                      tuneLength=2,
+                                                                                                                                                      trControl=ctrl)
+                                                                                                                                        train_p_rf <- predict(M_rf,D_train)
+                                                                                                                                        test_p_rf<- predict(M_rf,X_test)
+                                                                                                                                        RMSE(train_p_rf, D_train$Y_train) # training error
+                                                                                                                                        M_rf$results[row.names(M_rf$bestTune),'RMSE']# validation error
+                                                                                                                                        ```
+                                                                                                                                        ### Model selection
+                                                                                                                                        
+                                                                                                                                        The following graph puts together the validation result of the four models for comparaison. Note that only one validation set is used here, namely the 10% second most recent data. 
+                                                                                                                                        
+                                                                                                                                        ```{r, warning=FALSE,message=FALSE}
+                                                                                                                                        modelList <- list(lm=M_base,
+                                                                                                                                                          enet =M_glmnet,
+                                                                                                                                                          svm=M_svm,
+                                                                                                                                                          rf=M_rf)
+                                                                                                                                        resamps<- resamples(modelList)
+                                                                                                                                        bwplot(resamps)
+                                                                                                                                        ```
+                                                                                                                                        
+                                                                                                                                        Support vector machine and elastic net are the two models with the best performance. Their performances are actually very close to each other. 
+                                                                                                                                        Random forest has a slightly worse performance compared to the two models. Linear regression has the worst performance. 
+                                                                                                                                        
+                                                                                                                                        ### Model testing
+                                                                                                                                        
+                                                                                                                                        Let's now test the four models on the test set and hope that the models that did well on the validation set will also do well on the test set.
+
+It is also helpful to compare the performance of the models to a baseline performance. 
+Here, a naive approach to predict the future sales would be to use the average past sales. This gives us a baseline test performance of root mean squared error 0.424387. Our models should at least perform better than this.
+
+```{r, warning=FALSE,message=FALSE}
+train_mean <- mean(D_train$Y_train)
+RMSE(rep(train_mean,length(Y_test)), Y_test) 
+```
+
+Below are the test performance of the four models. All of the four models have lower root mean squared error than the baseline. This is a good sign.
+The test performance of the four models are also ranked in a similar way as their training performance. 
+Support vector machine therefore appears to be the best model for this given data (for now).
+
+```{r, warning=FALSE,message=FALSE}
+RMSE(test_p_b, Y_test) #linear regression
+RMSE(test_p_rf, Y_test) # random forest
+RMSE(test_p_glmnet, Y_test) # elastic net
+RMSE(test_p_svm, Y_test) # support vector machine
+```
+
+
+### Model stacking
+
+Instead of choosing just one single best performing model using the validation results, we can also take the average of the predictions of the four models as the final predictions.
+
+```{r, warning=FALSE,message=FALSE}
+test_stacked <-(test_p_b+test_p_glmnet+test_p_rf+test_p_svm)/4
+RMSE(test_stacked, Y_test)
+```
+Here, model stacking does not give us a better result compared to using support vector machine alone. 
+However, stacking multiple different models makes the predictions more stable and potentially more robust to future changes in the data distribution.
+
+
+### TODO
+
+* Feature engineering 
+* Explore other predictive models
+* Alternative way of model stacking
